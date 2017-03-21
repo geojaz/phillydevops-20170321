@@ -10,9 +10,9 @@ For further questions, please take a look at the kops guide to running [k8s on A
 
 | Name | Description  |  Link |
 | -----| ------------| :------: |
-| cluster-1 | Single zone, single master, public topo | [cluster-1](asdf) |
-| cluster-2 | Single zone, single master, private topo | [cluster-2](asdf) |
-| cluster-3 | Existing VPC, multi zone, multi master, private topo| [cluster-3](asdf) |
+| cluster-1 | Single zone, single master, public topo | [cluster-1](https://github.com/geojaz/phillydevops-20170321/tree/master/default/clusters/cluster-1/cluster-config) |
+| cluster-2 | Single zone, single master, private topo | [cluster-2](https://github.com/geojaz/phillydevops-20170321/tree/master/default/clusters/cluster-2/cluster-config) |
+| cluster-3 | Existing VPC, multi zone, multi master, private topo| [cluster-3](https://github.com/geojaz/phillydevops-20170321/tree/master/default/clusters/cluster-3/cluster-config) |
 
 
 
