@@ -1,0 +1,234 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana-logging
+  namespace: kube-system
+  labels:
+    k8s-app: kibana-logging
+    kubernetes.io/name: "Kibana"
+    kubernetes.io/cluster-service: "true"
+spec:
+  ports:
+  - port: 5601
+    protocol: TCP
+    targetPort: ui
+  selector:
+    k8s-app: kibana-logging
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-logging
+  namespace: kube-system
+  labels:
+    k8s-app: elasticsearch-logging
+    kubernetes.io/name: "Elasticsearch"
+    kubernetes.io/cluster-service: "true"
+spec:
+  ports:
+  - port: 9200
+    protocol: TCP
+    targetPort: db
+  selector:
+    k8s-app: elasticsearch-logging
+---
+apiVersion: apps/v1beta1
+kind: StatefulSet
+metadata:
+  name: elasticsearch-logging
+  namespace: kube-system
+  labels:
+    k8s-app: elasticsearch-logging
+    version: v1
+    kubernetes.io/cluster-service: "true"
+spec:
+  serviceName: elasticsearch-logging
+  replicas: 2
+  template:
+    metadata:
+      labels:
+        k8s-app: elasticsearch-logging
+        version: v1
+        kubernetes.io/cluster-service: "true"
+    spec:
+      containers:
+      - image: gcr.io/google_containers/elasticsearch:v2.4.1
+        name: elasticsearch-logging
+        resources:
+          # keep request = limit to keep this container in guaranteed class
+          limits:
+            cpu: 100m
+          requests:
+            cpu: 100m
+        ports:
+        - containerPort: 9200
+          name: db
+          protocol: TCP
+        - containerPort: 9300
+          name: transport
+          protocol: TCP
+        volumeMounts:
+        - name: es-persistent-storage
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: es-persistent-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Ti
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: kibana-logging
+  namespace: kube-system
+  labels:
+    k8s-app: kibana-logging
+    version: v1
+    kubernetes.io/cluster-service: "true"
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        k8s-app: kibana-logging
+        version: v1
+        kubernetes.io/cluster-service: "true"
+    spec:
+      containers:
+      - name: kibana-logging
+        image: gcr.io/google_containers/kibana:v4.6.1
+        resources:
+          # keep request = limit to keep this container in guaranteed class
+          limits:
+            cpu: 100m
+          requests:
+            cpu: 100m
+        env:
+          - name: "ELASTICSEARCH_URL"
+            value: "http://elasticsearch-logging:9200"
+          - name: "KIBANA_BASE_URL"
+            value: "/api/v1/proxy/namespaces/kube-system/services/kibana-logging"
+        ports:
+        - containerPort: 5601
+          name: ui
+          protocol: TCP
+---
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: fluent-config
+  namespace: kube-system
+apiVersion: v1
+data:
+  fluent.conf: |
+    # config loaded from configmap
+    # input plugin that exports metrics
+    <source>
+      @type prometheus
+    </source>
+    # input plugin that collects metrics from MonitorAgent
+    <source>
+      @type prometheus_monitor
+    </source>
+    <source>
+      @type tail
+      path /var/log/containers/*.log
+      pos_file /var/log/es-containers.log.pos
+      time_format %Y-%m-%dT%H:%M:%S.%N
+      tag kubernetes.*
+      format json
+      read_from_head true
+    </source>
+    <filter kubernetes.**>
+      @type kubernetes_metadata
+      kubernetes_url https://100.64.0.1
+      verify_ssl false
+      preserve_json_log true
+    </filter>
+    <filter **>
+      @type prometheus
+      <metric>
+        name fluentd_records_total
+        type counter
+        desc The total number of records read by fluentd.
+      </metric>
+    </filter>
+    <match **>
+      @type elasticsearch
+      include_tag_key true
+      time_key time
+      host elasticsearch-logging
+      port 9200
+      scheme http
+      flatten_hashes true
+      flatten_hashes_separator _
+      buffer_type memory
+      buffer_chunk_limit 8m
+      buffer_queue_limit 8192
+      flush_interval 10s
+      retry_limit 10
+      disable_retry_limit
+      retry_wait 1s
+      max_retry_wait 60s
+      num_threads 4
+      logstash_format true
+      reload_connections false
+    </match>
+    <system>
+      log_level trace
+    </system>
+---
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: fluentd-elasticsearch
+  namespace: kube-system
+  labels:
+    k8s-app: fluentd-logging
+    kubernetes.io/cluster-service: "true"
+spec:
+  template:
+    metadata:
+      labels:
+        k8s-app: fluentd-logging
+        kubernetes.io/cluster-service: "true"
+      name: fluentd-elasticsearch
+    spec:
+      containers:
+      - name: fluentd-elasticsearch
+        image: fabric8/fluentd-kubernetes:v1.19
+        resources:
+          limits:
+            memory: 200Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        env:
+          - name: "ELASTICSEARCH_HOST"
+            value: "elasticsearch-logging"
+          - name: "KUBERNETES_URL"
+            value: "https://100.64.0.1"
+          - name: "KUBERNETES_VERIFY_SSL"
+            value: "false"
+        volumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker
+          readOnly: true
+        - name: fluent-conf
+          mountPath: /etc/fluent
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker
+      - name: fluent-conf
+        configMap:
+          name: fluent-config
